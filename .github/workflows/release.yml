@@ -40,10 +40,17 @@ jobs:
 
       - name: Decode Certificate to File
         shell: pwsh
+        env:
+          # This pulls the specific secret output into a standard environment variable
+          PFX_BASE64: ${{ steps.kv_fetch.outputs[secrets.AZURE_PFX_SECRET_NAME] }}
         run: |
-          # Use the dynamic secret name from the step above
-          $secretName = "${{ secrets.AZURE_PFX_SECRET_NAME }}"
-          $pfx_cert_byte = [System.Convert]::FromBase64String("${{ steps.kv_fetch.outputs.$secretName }}")
+          # Now we use the environment variable directly in PowerShell
+          if (-not $env:PFX_BASE64) {
+            Write-Error "ERROR: PFX_BASE64 is empty. Check if AZURE_PFX_SECRET_NAME matches Azure Vault."
+            exit 1
+          }
+          
+          $pfx_cert_byte = [System.Convert]::FromBase64String($env:PFX_BASE64)
           [System.IO.File]::WriteAllBytes("${{ github.workspace }}\cert.pfx", $pfx_cert_byte)
           
           if (Test-Path "${{ github.workspace }}\cert.pfx") {
@@ -51,6 +58,7 @@ jobs:
             Write-Host "SUCCESS: cert.pfx created. Size: $size bytes"
           } else {
             Write-Error "ERROR: cert.pfx was NOT created!"
+            exit 1
           }
 
       - name: Build and Sign Tauri App
