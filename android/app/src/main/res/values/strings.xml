@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ChronoPhoto</string>
+    <string name="title_activity_main">ChronoPhoto</string>
+    <string name="package_name">com.chronophoto.app</string>
+    <string name="custom_url_scheme">com.chronophoto.app</string>
+</resources>

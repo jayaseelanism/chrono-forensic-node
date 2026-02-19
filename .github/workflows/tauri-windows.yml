@@ -1,0 +1,136 @@
+name: Build, Sign & Release (Windows)
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build Windows installers (matrix)
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        arch: [x64, i686]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain-action@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Ensure NSIS (for installer)
+        run: choco install nsis -y
+
+      - name: Add target toolchain (32-bit)
+        if: ${{ matrix.arch == 'i686' }}
+        run: |
+          rustup target add i686-pc-windows-msvc || true
+
+      - name: Build Tauri bundle (per-arch)
+        env:
+          CARGO_HOME: ${{ runner.temp }}\.cargo
+        shell: pwsh
+        run: |
+          $env:PATH += ";$env:USERPROFILE\.cargo\bin"
+          if ('${{ matrix.arch }}' -eq 'x64') {
+            $target = 'x86_64-pc-windows-msvc'
+          } else {
+            $target = 'i686-pc-windows-msvc'
+          }
+          npx tauri build --target $target
+
+      - name: Upload installers (per-arch)
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-windows-bundles-${{ matrix.arch }}
+          path: |
+            src-tauri/target/**/bundle/**
+
+  sign-and-release:
+    name: Sign installers (Azure Key Vault or PFX) and create Release
+    runs-on: windows-latest
+    needs: build-windows
+    steps:
+      - name: Download built artifacts (x64)
+        uses: actions/download-artifact@v4
+        with:
+          name: tauri-windows-bundles-x64
+          path: bundles/x64
+
+      - name: Download built artifacts (i686)
+        uses: actions/download-artifact@v4
+        with:
+          name: tauri-windows-bundles-i686
+          path: bundles/i686
+
+      - name: Combine bundles folder
+        run: |
+          New-Item -ItemType Directory -Force -Path bundles/all
+          cp -Re bundles\x64\* bundles\all\ 2>$null || true
+          cp -Re bundles\i686\* bundles\all\ 2>$null || true
+
+      - name: Optionally fetch PFX from Azure Key Vault
+        if: ${{ secrets.AZURE_CREDENTIALS && secrets.AZURE_KEYVAULT_NAME && secrets.AZURE_PFX_SECRET_NAME }}
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Download PFX from Key Vault (optional)
+        if: ${{ secrets.AZURE_CREDENTIALS && secrets.AZURE_KEYVAULT_NAME && secrets.AZURE_PFX_SECRET_NAME }}
+        shell: pwsh
+        run: |
+          az keyvault secret download --vault-name ${{ secrets.AZURE_KEYVAULT_NAME }} --name ${{ secrets.AZURE_PFX_SECRET_NAME }} --file codesign.pfx
+
+      - name: Restore PFX from GitHub secret (fallback)
+        if: ${{ !secrets.AZURE_CREDENTIALS && secrets.CODE_SIGNING_PFX }}
+        shell: pwsh
+        run: |
+          $pfxb = "${{ secrets.CODE_SIGNING_PFX }}"
+          [IO.File]::WriteAllBytes('codesign.pfx', [Convert]::FromBase64String($pfxb))
+
+      - name: Ensure signtool available
+        run: choco install windows-sdk-10.0 -y || Write-Host 'windows sdk install skipped'
+
+      - name: Sign installers with signtool (if PFX avail)
+        if: ${{ secrets.CODE_SIGNING_PASSWORD || (secrets.AZURE_CREDENTIALS && secrets.AZURE_KEYVAULT_NAME && secrets.AZURE_PFX_SECRET_NAME) }}
+        shell: pwsh
+        env:
+          PFX_PASS: ${{ secrets.CODE_SIGNING_PASSWORD }}
+        run: |
+          $pfx = Join-Path $PWD 'codesign.pfx'
+          if (-Not (Test-Path $pfx)) { Write-Host 'PFX not found, skipping signing'; exit 0 }
+          $files = Get-ChildItem bundles\all -Recurse -Include *.exe,*.msi
+          foreach ($f in $files) {
+            Write-Host "Signing $($f.FullName)"
+            signtool sign /fd SHA256 /a /f $pfx /p $env:PFX_PASS /tr http://timestamp.digicert.com /td SHA256 "$($f.FullName)"
+          }
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+
+      - name: Upload all installers to Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: bundles/all/**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

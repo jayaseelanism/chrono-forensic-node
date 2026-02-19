@@ -1,0 +1,9 @@
+{
+  "name": "CHRONO // Forensic Node",
+  "description": "High-performance Obsidian UI for local media metadata analysis, deduplication, and archival sorting.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
