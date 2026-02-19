@@ -39,17 +39,24 @@ jobs:
       - name: Decode Certificate to File
         shell: pwsh
         run: |
-          # Convert the Base64 string from Key Vault back into a physical .pfx file
           $pfx_cert_byte = [System.Convert]::FromBase64String("${{ steps.kv_fetch.outputs.chrono-codesign-pfx }}")
           [System.IO.File]::WriteAllBytes("${{ github.workspace }}\cert.pfx", $pfx_cert_byte)
+          
+          # DEBUG LINE: Check if file exists and show size
+          if (Test-Path "${{ github.workspace }}\cert.pfx") {
+            $size = (Get-Item "${{ github.workspace }}\cert.pfx").Length
+            Write-Host "SUCCESS: cert.pfx created. Size: $size bytes"
+          } else {
+            Write-Error "ERROR: cert.pfx was NOT created!"
+          }
 
       - name: Build and Sign Tauri App
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # These variables tell Tauri to sign the Windows executable
+          # Use the absolute path to the decoded PFX file
           TAURI_SIGNING_PRIVATE_KEY: ${{ github.workspace }}\cert.pfx
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.AZURE_PFX_PASSWORD }}
         with:
-          tagName: v__VERSION__ # This will be replaced by the actual tag
+          tagName: v__VERSION__
           releaseName: "Chrono Forensic Node v__VERSION__"
