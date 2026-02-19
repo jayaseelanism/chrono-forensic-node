@@ -32,17 +32,20 @@ jobs:
       - name: Get Certificate from Key Vault
         uses: azure/get-keyvault-secrets@v1
         with:
+          # Ensure this name matches your GitHub Secret for the Vault name
           keyvault: ${{ secrets.AZURE_KEYVAULT_NAME }}
-          secrets: ${{ secrets.AZURE_PFX_SECRET_NAME }}
+          # This name MUST be the exact name of the secret inside the Azure Key Vault
+          secrets: ${{ secrets.AZURE_PFX_SECRET_NAME }} 
         id: kv_fetch
 
       - name: Decode Certificate to File
         shell: pwsh
         run: |
-          $pfx_cert_byte = [System.Convert]::FromBase64String("${{ steps.kv_fetch.outputs.chrono-codesign-pfx }}")
+          # Use the dynamic secret name from the step above
+          $secretName = "${{ secrets.AZURE_PFX_SECRET_NAME }}"
+          $pfx_cert_byte = [System.Convert]::FromBase64String("${{ steps.kv_fetch.outputs.$secretName }}")
           [System.IO.File]::WriteAllBytes("${{ github.workspace }}\cert.pfx", $pfx_cert_byte)
           
-          # DEBUG LINE: Check if file exists and show size
           if (Test-Path "${{ github.workspace }}\cert.pfx") {
             $size = (Get-Item "${{ github.workspace }}\cert.pfx").Length
             Write-Host "SUCCESS: cert.pfx created. Size: $size bytes"
@@ -54,9 +57,14 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Use the absolute path to the decoded PFX file
           TAURI_SIGNING_PRIVATE_KEY: ${{ github.workspace }}\cert.pfx
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.AZURE_PFX_PASSWORD }}
         with:
           tagName: v__VERSION__
           releaseName: "Chrono Forensic Node v__VERSION__"
+          # VERBOSE is critical here to see the SignTool output
+          args: --verbose
+
+      - name: Cleanup Certificate
+        if: always()
+        run: rm ${{ github.workspace }}\cert.pfx
